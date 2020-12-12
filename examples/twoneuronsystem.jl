@@ -4,12 +4,13 @@
 using DifferentialEquations, ModelingToolkit, Plots, OrdinaryDiffEq
 
 # Channel gating functions
-αn(V) = (0.01*(V + 55))/(1 - exp(-(V + 55)/10))
+αm(V) = (0.01*(V + 55))/(1 - exp(-(V + 55)/10))
 βn(V) = 0.125 * exp(-(V + 65)/80)
 αm(V) = (0.1*(V + 40))/(1 - exp(-(V + 40)/10))
 βm(V) = 4*exp(-(V + 65)/18)
 αh(V) = 0.07*exp(-(V+65)/20)
 βh(V) = 1/(1 + exp(-(V + 35)/10))
+
 
 # Synaptic transmitter release where
 # Tmax = 1 mM Vthreshold = 1 mV Kp = 1 mV
