@@ -2,6 +2,8 @@ using ModelingToolkit, DiffEqOperators, OrdinaryDiffEq
 
 # This works after PR in DiffEqOperators for Neumann/Robin BCS gets merged.
 
+# Constants -- these are left out of the parameter list and passed as hard coded
+# coefficient values for now.
 dx = 1.0e-4 # compartment size (1 µm in cm)
 Iapp = 5e-9 # in mA
 Vinit = -65.0 # mV
@@ -18,7 +20,7 @@ Cm  = 1.0e-3*area # mF / cm^2
 @derivatives Dxx''~x
 @derivatives Dx'~x
 
-# HH equations on a cable
+# The Cable Equation with passive leak conductance
 eqs = [Dt(V(t,x)) ~ a/(2*r_L*Cm) * Dxx(V(t,x)) - (gl/Cm)*(V(t,x) - El)]
 
 # Cable equation BCs + ICs
@@ -26,8 +28,8 @@ bcs = [V(0.0,x) ~ Vinit,
        Dx(V(t,0.0)) ~ -(r_L*Iapp)/(pi*a^2), # Neumann BC for current injection
        Dx(V(t,0.2)) ~ 0.0] # Neumann BC for "sealed end"
 
-domains = [t ∈ IntervalDomain(0.0, 200.0),
-           x ∈ IntervalDomain(0.0, 0.2)]
+domains = [t ∈ IntervalDomain(0.0, 200.0), # simulate 200ms
+           x ∈ IntervalDomain(0.0, 0.2)] # over a cable of length 2000 µm
 
 sys = PDESystem(eqs, bcs, domains, [t, x], [V])
 
