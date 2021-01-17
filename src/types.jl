@@ -1,9 +1,11 @@
 
+# Below are ideas for potential types at the _high_ level DSL. These would be used to
+# manipulate ModelingToolkit IR -> generate functions for consumption by the DiffEq backend
+
 abstract type Geometry end
 abstract type Point <: Geometry end
 abstract type Sphere <: Geometry end
 abstract type Cylinder <: Geometry end
-
 
 # Dynamics types describe inherent non-linearities/dynamics
 abstract type Dynamics end
@@ -37,10 +39,11 @@ end
 
 dyn = @dynamics begin
     # name and describe a set of membrane properties/non-linear dynamics
+    # potentially combining different custom channel models, etc
 end
 
 neuron = @neuron begin
-    
+   # compose channel models, dynamics, morphology and topology into the description of a cell 
 end
 
 
