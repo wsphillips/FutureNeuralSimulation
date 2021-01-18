@@ -6,7 +6,38 @@ using DiffEqBase
 # Below is a prototype implementation of a compartmental model with active membrane dynamics,
 # which resembles an unbranched, unmyelinated axon that's discretized in one dimension (length of the cable)
 
-# Right now, I'll be using a hand-rolled version of backwards Euler. We should have freedom to swap
+# Right now, I'm using a hand-rolled version of backwards Euler. We should have freedom to swap
+
+# Hodgkin-Huxley channel gating functions
+αn(V) = V == -55.0 ? 0.1 : (0.01*(V + 55))/(1 - exp(-(V + 55)/10))
+βn(V) = 0.125 * exp(-(V + 65)/80)
+αm(V) = V == -40.0 ? 1.0 : (0.1*(V + 40))/(1 - exp(-(V + 40)/10))
+βm(V) = 4*exp(-(V + 65)/18)
+αh(V) = 0.07*exp(-(V+65)/20)
+βh(V) = 1/(1 + exp(-(V + 35)/10))
+
+# Steady-state channel gating
+m∞(V) = αm(V)/(αm(V) + βm(V))
+h∞(V) = αh(V)/(αh(V) + βh(V))
+n∞(V) = αn(V)/(αn(V) + βn(V))
+
+function stepm!(m, V, dt)
+    @. m = (m + αm(V)*dt)/(1+ (αm(V) + βm(V))*dt)
+end
+
+function steph!(h, V, dt)
+    @. h = (h + αh(V)*dt)/(1+ (αh(V) + βh(V))*dt)
+end
+
+function stepn!(n, V, dt)
+    @. n = (n + αn(V)*dt)/(1+ (αn(V) + βn(V))*dt)
+end
+
+function update_gates!(V, m, h, n, dt)
+    stepm!(m, V, dt)
+    steph!(h, V, dt)
+    stepn!(n, V, dt)
+end
 
 abstract type AbstractNeuronalAlgorithm <: DiffEqBase.DEAlgorithm end
 struct SimpleActiveCable <: AbstractNeuronalAlgorithm end
@@ -127,6 +158,30 @@ end
 
     integ.tprev = t
     integ.t += dt
+
+    # First solve Cable equation
+    @. f.D = 1 + (a*dt)/(rl*cm*dx^2) + (dt/cm)*(gna*m^3*h + gk*n^4 + gl)
+
+    # in first compartment we inject a 1 nA current
+    u[1] = u[1] + (dt/cm)*(gna*m[1]^3*h[1]*Ena + gk*n[1]^4*Ek + gl*El) + (Iapp*dt)/(pi*a*cm*dx)
+    u[2:end] .= @. u[2:end] + (dt/cm)*(gna*m[2:end]^3*h[2:end]*Ena + gk*n[2:end]^4*Ek + gl*El)
+
+    #Backward pass
+    for i in N:-1:2
+        factor = f.U[i] / D[i]
+        f.D[i-1] -= factor * f.L[i] 
+        u[i-1] -= factor * u[i] 
+    end
+    # Root solve
+    u[1] /= f.D[1]
+    # Forward pass
+    for j in 2:N
+        u[j] -= f.L[j]*u[j-1]
+        u[j] /= f.D[j]
+    end
+    
+    # Update dimensionless channel gating vars
+    update_gates!(u, m, h, n, dt)
 
     return nothing
 end
