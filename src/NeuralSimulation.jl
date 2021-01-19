@@ -1,12 +1,23 @@
 module NeuralSimulation
 
 using DiffEqBase
+export CableSection
+
+# Placeholder geometry type
+struct CableSection
+    radius::T
+    len::T
+    rl::T
+    cm::T
+    num::N
+end
 
 # Active membrane cable solver:
 # Below is a prototype implementation of a compartmental model with active membrane dynamics,
 # which resembles an unbranched, unmyelinated axon that's discretized in one dimension (length of the cable)
 
-# Right now, I'm using a hand-rolled version of backwards Euler. We should have freedom to swap
+# Right now, I'm using a hand-rolled version of backwards Euler, and the fit with DiffEq is a bit awkward
+# since it involves a partial algebraic solution to ImplicitEuler, rather than full numerical solution
 
 # Hodgkin-Huxley channel gating functions
 αn(V) = V == -55.0 ? 0.1 : (0.01*(V + 55))/(1 - exp(-(V + 55)/10))
@@ -33,33 +44,91 @@ function stepn!(n, V, dt)
     @. n = (n + αn(V)*dt)/(1+ (αn(V) + βn(V))*dt)
 end
 
-function update_gates!(V, m, h, n, dt)
+function update_gates!(du, u, p, t)
     stepm!(m, V, dt)
     steph!(h, V, dt)
     stepn!(n, V, dt)
 end
 
+struct PseudoThomasAlg <: Function
+    L::S
+    D::S
+    U::S
+    dt::T
+    dx::T
+    function PseudoThomasAlg(cable::CableSection, dt)
+        rl = cable.rl
+        a = cable.radius
+        cm = cable.cm
+        n = cable.num
+        dx = cable.len/n
+
+        L = Vector{typeof(cable.len)}(undef, n)
+        D = copy(L)
+        U = copy(L)
+
+        L[1] = 0.0
+        L[2:end-1] .= -(a*dt)/(2*rl*cm*dx^2)
+        L[end] = -(a*dt)/(rl*cm*dx^2)
+        
+        U[1] = -(a*dt)/(rl*cm*dx^2)
+        U[2:end-1] .= -(a*dt)/(2*rl*cm*dx^2)
+        U[end] = 0.0
+
+        new(L, D, U, dt, dx)
+    end
+end
+
+function (f::PseudoThomasAlg)(du, u, p, t)
+    
+    dt = f.dt
+    dx = f.dx
+    a, rl, cm, gna, gk, gl, Ena, Ek, El, Iapp = p
+
+    @. f.D = 1 + (a*dt)/(rl*cm*dx^2) + (dt/cm)*(gna*m^3*h + gk*n^4 + gl)
+
+    # in first compartment we inject a 1 nA current
+    u[1] = u[1] + (dt/cm)*(gna*m[1]^3*h[1]*Ena + gk*n[1]^4*Ek + gl*El) + (Iapp*dt)/(pi*a*cm*dx)
+    
+    u[2:end] = @. u[2:end] + (dt/cm)*(gna*m[2:end]^3*h[2:end]*Ena + gk*n[2:end]^4*Ek + gl*El)
+
+    #Backward pass
+    for i in N:-1:2
+        factor = f.U[i] / D[i]
+        f.D[i-1] -= factor * f.L[i] 
+        u[i-1] -= factor * u[i] 
+    end
+
+    # Root solve
+    u[1] /= f.D[1]
+
+    # Forward pass
+    for j in 2:N
+        u[j] -= f.L[j]*u[j-1]
+        u[j] /= f.D[j]
+    end
+end
+
 abstract type AbstractNeuronalAlgorithm <: DiffEqBase.DEAlgorithm end
-struct SimpleActiveCable <: AbstractNeuronalAlgorithm end
-export SimpleActiveCable
+
+# use BackwardsEuler() since ImplicitEuler() is defined; this might not be a problem in the end
+# since we are defining the use of the algorithm on a custom problem type.
+struct BackwardsEuler <: AbstractNeuronalAlgorithm end
+export BackwardsEuler
 
 abstract type AbstractNeuronalFunction{iip} <: DiffEqBase.AbstractDiffEqFunction{iip} end
 
-struct SimpleActiveCableFunction{iip, F1, F2, S} <: AbstractNeuronalFunction{iip}
-    
-    f1::F1  # Cable equation (function) with HH
-    f2::F2  # Channel gating dynamics
-    
-    # intermediates for cable equation solution
-    L::S     # subdiagonal
-    D::S     # Diagonal
-    U::S     # super-diagonal
+struct HHCableFunction{iip, F1, F2, S} <: AbstractNeuronalFunction{iip}
+    f1::F1  # Cable equation solver (PseudoThomasAlg)
+    f2::F2  # Channel gating dynamics (update_gates)
     # ignoring other typical fields used in DiffEq function types for now
 end
 
+function SimpleActiveCableFunction{iip, F1, F2, S}()
+
 abstract type AbstractNeuronalIntegrator{Alg, IIP, U, T} <: DiffEqBase.DEIntegrator{Alg, IIP, U, T} end
 
-mutable struct SimpleActiveCableIntegrator{IIP, S, T, P, F} <: AbstractNeuronalIntegrator{SimpleActiveCable, IIP, S, T}
+mutable struct HHCableIntegrator{IIP, S, T, P, F} <: AbstractNeuronalIntegrator{SimpleActiveCable, IIP, S, T}
     f::F     # Cable equations
     uprev::S # Previous state
     u::S     # Current state 
@@ -70,19 +139,19 @@ mutable struct SimpleActiveCableIntegrator{IIP, S, T, P, F} <: AbstractNeuronalI
     p::P     # Parameters container
 end
 
-const SACable = SimpleActiveCableIntegrator
+const HHCable = HHCableIntegrator
 DiffEqBase.isinplace(::SACable{IIP}) where {IIP} = IIP
 
 abstract type AbstractNeuronalProblem{uType, tType, isinplace} <: DiffEqBase.DEProblem end
 
-struct SimpleActiveCableProblem{uType, tType, isinplace, P, F, K} <: AbstractNeuronalProblem{uType, tType, isinplace}
+struct HHCableProblem{uType, tType, isinplace, P, F, K} <: AbstractNeuronalProblem{uType, tType, isinplace}
     f::F
     u0::uType
     tspan::tType
     p::P # constants to be supplied as second arg of `f`
     kwargs::K # DiffEq says this is `a callback to be applied to every solver which uses the problem`
               # I'm not sure what's meant by that atm
-    function SimpleActiveCableProblem{iip}(f::AbstractNeuronalFunction{iip}, u0, tspan, p; kwargs...) where {iip}
+    function HHCableProblem{iip}(f::AbstractNeuronalFunction{iip}, u0, tspan, p; kwargs...) where {iip}
         new{typeof(u0), typeof(tspan), isinplace(f), typeof(p), typeof(f), typeof(kwargs)}(f, u0, tspan, p, kwargs)
     end
 end
@@ -93,8 +162,8 @@ function DiffEqBase.solve(prob::AbstractNeuronalProblem, args...; kwargs...)
     __solve(prob,args...; kwargs...)
 end
 
-function DiffEqBase.__init(prob::SimpleActiveCableProblem, alg::SimpleActiveCable; dt = error("dt is required for this algorithm"))
-    simpleactivecable_init(prob.f,
+function DiffEqBase.__init(prob::HHCableProblem, alg::BackwardsEuler; dt = error("dt is required for this algorithm"))
+    hhcable_init(prob.f,
                    DiffEqBase.isinplace(prob),
                    prob.u0,
                    prob.tspan[1],
@@ -102,7 +171,7 @@ function DiffEqBase.__init(prob::SimpleActiveCableProblem, alg::SimpleActiveCabl
                    prob.p)
 end
 
-function DiffEqBase.__solve(prob::SimpleActiveCableProblem, alg::SimpleActiveCable; dt = error("dt is required for this algorithm"))
+function DiffEqBase.__solve(prob::HHCableProblem, alg::BackwardsEuler; dt = error("dt is required for this algorithm"))
 
     u0    = prob.u0
     tspan = prob.tspan
@@ -116,15 +185,14 @@ function DiffEqBase.__solve(prob::SimpleActiveCableProblem, alg::SimpleActiveCab
     @inbounds us[1] = copy(u0)
 
     # construct integrator (holds pre-allocated state/parameter data needed for each step)
-    integ = simpleactivecable_init(prob.f, DiffEqBase.isinplace(prob), prob.u0, prob.tspan[1], dt, prob.p)
+    integ = hhcable_init(prob.f, DiffEqBase.isinplace(prob), prob.u0, prob.tspan[1], dt, prob.p)
 
     # step through time series and copy new state vector to history (`us`) each step
     for i = 1:n-1
         step!(integ)
-        us[i+1] = copy(integ.u) # I think this is allocating? Why not copyto?
+        us[i+1] .= integ.u
     end
 
-    # We might need a dispatch for build_solution too?
     #=
     sol = DiffEqBase.build_solution(prob, alg, ts, us, calculate_error = false)
 
@@ -134,10 +202,10 @@ function DiffEqBase.__solve(prob::SimpleActiveCableProblem, alg::SimpleActiveCab
     return us
 end
 
-@inline function simpleactivecable_init(f::F, IIP::Bool, u0::S, t0::T, dt::T, p::P) where
+@inline function hhcable_init(f::F, IIP::Bool, u0::S, t0::T, dt::T, p::P) where
     {F, P, T, S<:AbstractArray{T}}
 
-    integ = SACable{IIP, S, T, P, F}(f, _copy(u0), _copy(u0), t0, t0, t0, dt, p)
+    integ = HHCable{IIP, S, T, P, F}(f, copy(u0), copy(u0), t0, t0, t0, dt, p)
     return integ
 end
 
@@ -147,7 +215,8 @@ end
 @inline function DiffEqBase.step!(integ::SACable{true, S, T}) where {T, S}
     integ.uprev       .= integ.u
     tmp                = integ.tmp
-    f!                 = integ.f
+    cablesolve!        = integ.f1
+    updategates!       = integ.f2
     p                  = integ.p
     t                  = integ.t
     dt                 = integ.dt
@@ -159,29 +228,9 @@ end
     integ.tprev = t
     integ.t += dt
 
-    # First solve Cable equation
-    @. f.D = 1 + (a*dt)/(rl*cm*dx^2) + (dt/cm)*(gna*m^3*h + gk*n^4 + gl)
-
-    # in first compartment we inject a 1 nA current
-    u[1] = u[1] + (dt/cm)*(gna*m[1]^3*h[1]*Ena + gk*n[1]^4*Ek + gl*El) + (Iapp*dt)/(pi*a*cm*dx)
-    u[2:end] .= @. u[2:end] + (dt/cm)*(gna*m[2:end]^3*h[2:end]*Ena + gk*n[2:end]^4*Ek + gl*El)
-
-    #Backward pass
-    for i in N:-1:2
-        factor = f.U[i] / D[i]
-        f.D[i-1] -= factor * f.L[i] 
-        u[i-1] -= factor * u[i] 
-    end
-    # Root solve
-    u[1] /= f.D[1]
-    # Forward pass
-    for j in 2:N
-        u[j] -= f.L[j]*u[j-1]
-        u[j] /= f.D[j]
-    end
-    
+     
     # Update dimensionless channel gating vars
-    update_gates!(u, m, h, n, dt)
+    update_gates!(du, u, p, t)
 
     return nothing
 end
