@@ -97,3 +97,6 @@ history = Vector{Vector{Float64}}()
     end 
 end
 
+using Plots
+
+plot(RHS)
