@@ -90,6 +90,10 @@ struct VoltageGatedChannel{I} <: AbstractConductance where {I <: Ion}
     sys::ODESystem
 end
 
+struct VoltageIonGatedChannel{I,C} <: AbstractConductance where {I <: Ion, C <: Ion}
+    sys::ODESystem
+end
+
 # Return ODESystem pretty printing for our wrapper types
 Base.show(io::IO, ::MIME"text/plain", x::VoltageGatedChannel) = Base.display(x.sys)
 
@@ -120,6 +124,10 @@ function VoltageGatedChannel{I}(gate_models::Vector{<:AbstractGateModel}; max_g:
 
     return VoltageGatedChannel{I}(system)
 end
+
+function VoltageIonGatedChannel{I,C}(gate_models::Vector{<:AbstractGateModel}; max_g::SpecificConductance,
+                                     Vinit::Voltage = -65mV, name) where {I<:Ion, C<:Ion}
+
 
 abstract type AbstractNeuron end
 

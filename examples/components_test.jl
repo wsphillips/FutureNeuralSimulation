@@ -26,15 +26,17 @@ h = SSTau(
 # Synaptic conductances fall in the range of 10-100nS
 @named FastNaV = VoltageGatedChannel{Na}([m, h], max_g = 120mS/cm^2)
 @named DelayedRect = VoltageGatedChannel{K}([n], max_g = 36mS/cm^2)
+@name KCaV = VoltageIonGatedChannel{K,Ca}(
 MembraneLeak = PassiveChannel{Leak}(max_g = 0.3mS/cm^2)
 
 membrane_currents = [FastNaV, DelayedRect, Leak]
+
 eq_potentials = [Na => 50mV,
                  K  => -80mV,
                  Leak => -50mV]
 
 # And continue on with forms similar to this...
-@named SomeNeuron = Neuron(membrane_currents, capacitance = 1µF/cm^2) # Defaults to dimensionless
+@named SomeNeuron = Neuron(membrane_currents, eq_potentials)
 
 @named MyCircuit = NeuronalNetwork(Vector{Neurons}, 
 
